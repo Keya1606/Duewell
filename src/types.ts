@@ -57,4 +57,4 @@ export interface DailyPlan {
   created_at: string;
 }
 
-export type RouteType = "/" | "/signin" | "/signup" | "/app";
+export type RouteType = "/" | "/signin" | "/signup" | "/app" | "/profile";

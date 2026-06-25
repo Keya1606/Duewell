@@ -5,6 +5,7 @@ import LandingPage from "./components/LandingPage";
 import SignInPage from "./components/SignInPage";
 import SignUpPage from "./components/SignUpPage";
 import Dashboard from "./components/Dashboard";
+import ProfilePage from "./components/ProfilePage";
 import { Loader2 } from "lucide-react";
 
 interface SessionInfo {
@@ -22,7 +23,7 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname as RouteType;
-      if (["/", "/signin", "/signup", "/app"].includes(path)) {
+      if (["/", "/signin", "/signup", "/app", "/profile"].includes(path)) {
         setRoute(path);
       } else {
         setRoute("/");
@@ -95,12 +96,12 @@ export default function App() {
 
     if (isAuthenticated) {
       // Redirect logged-in users away from logged-out views
-      if (route === "/" || route === "/signin" || route === "/signup") {
-        navigate("/app");
+      if (route === "/signin" || route === "/signup") {
+        navigate("/");
       }
     } else {
       // Redirect logged-out users away from logged-in views
-      if (route === "/app") {
+      if (route === "/app" || route === "/profile") {
         navigate("/");
       }
     }
@@ -128,6 +129,7 @@ export default function App() {
       // Reset state and clear storage for offline fallbacks
       localStorage.removeItem("lifesaver_session_email");
       localStorage.removeItem("lifesaver_session_id");
+      localStorage.removeItem("lifesaver_force_local_mode");
       setSession(null);
       setIsAuthenticated(false);
       setAuthLoading(false);
@@ -149,7 +151,14 @@ export default function App() {
   // Render view
   switch (route) {
     case "/":
-      return <LandingPage onNavigate={navigate} isAuthenticated={isAuthenticated} />;
+      return (
+        <LandingPage 
+          onNavigate={navigate} 
+          isAuthenticated={isAuthenticated} 
+          onLogout={handleLogout} 
+          userEmail={session ? session.email : ""} 
+        />
+      );
     case "/signin":
       return <SignInPage onNavigate={navigate} onLoginSuccess={handleLoginSuccess} />;
     case "/signup":
@@ -163,7 +172,22 @@ export default function App() {
           onNavigate={navigate} 
         />
       ) : null;
+    case "/profile":
+      return session ? (
+        <ProfilePage 
+          userEmail={session.email} 
+          onLogout={handleLogout} 
+          onNavigate={navigate} 
+        />
+      ) : null;
     default:
-      return <LandingPage onNavigate={navigate} isAuthenticated={isAuthenticated} />;
+      return (
+        <LandingPage 
+          onNavigate={navigate} 
+          isAuthenticated={isAuthenticated} 
+          onLogout={handleLogout} 
+          userEmail={session ? session.email : ""} 
+        />
+      );
   }
 }

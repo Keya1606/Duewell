@@ -284,34 +284,61 @@ export const dataService = {
 
   // 8. Toggle Habit Completion for Today
   async toggleHabitForToday(userId: string, habitId: string): Promise<Habit> {
+    const todayStr = new Date().toISOString().split("T")[0];
+    return this.toggleHabitForDate(userId, habitId, todayStr);
+  },
+
+  // 8b. Toggle Habit Completion for Specific Date
+  async toggleHabitForDate(userId: string, habitId: string, dateStr: string): Promise<Habit> {
     const habits = await this.getHabits(userId);
     const habit = habits.find((h) => h.id === habitId);
     if (!habit) throw new Error("Habit not found");
 
-    const todayStr = new Date().toISOString().split("T")[0];
     let updatedCompletedDates = [...habit.completed_dates];
-    let updatedStreak = habit.streak;
-
-    if (updatedCompletedDates.includes(todayStr)) {
+    if (updatedCompletedDates.includes(dateStr)) {
       // Uncheck
-      updatedCompletedDates = updatedCompletedDates.filter((d) => d !== todayStr);
-      // Recalculate streak simple fallback
-      updatedStreak = Math.max(0, updatedStreak - 1);
+      updatedCompletedDates = updatedCompletedDates.filter((d) => d !== dateStr);
     } else {
       // Check
-      updatedCompletedDates.push(todayStr);
+      updatedCompletedDates.push(dateStr);
+    }
+
+    // Helper to calculate streak consecutively ending today or yesterday
+    const calculateStreak = (completedDates: string[]): number => {
+      if (!completedDates || completedDates.length === 0) return 0;
+      const datesSet = new Set(completedDates);
       
-      // Calculate streak: check if yesterday was also completed to increment
+      const todayStr = new Date().toISOString().split("T")[0];
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = yesterday.toISOString().split("T")[0];
       
-      if (updatedCompletedDates.includes(yesterdayStr)) {
-        updatedStreak += 1;
+      let startRefDate = new Date();
+      if (datesSet.has(todayStr)) {
+        startRefDate = new Date();
+      } else if (datesSet.has(yesterdayStr)) {
+        startRefDate = yesterday;
       } else {
-        updatedStreak = 1; // reset or start fresh
+        return 0; // streak broken if neither today nor yesterday is completed
       }
-    }
+      
+      let streak = 0;
+      let checkDate = new Date(startRefDate);
+      
+      // Infinite loop guard, check up to 365 days max
+      for (let i = 0; i < 365; i++) {
+        const checkStr = checkDate.toISOString().split("T")[0];
+        if (datesSet.has(checkStr)) {
+          streak++;
+          checkDate.setDate(checkDate.getDate() - 1);
+        } else {
+          break;
+        }
+      }
+      return streak;
+    };
+
+    const updatedStreak = calculateStreak(updatedCompletedDates);
 
     if (isSupabaseConfigured && supabase) {
       const { data, error } = await supabase

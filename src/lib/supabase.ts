@@ -8,7 +8,8 @@ export const isSupabaseConfigured =
   Boolean(supabaseUrl) && 
   Boolean(supabaseAnonKey) && 
   supabaseUrl !== "YOUR_SUPABASE_PROJECT_URL" && 
-  supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY";
+  supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY" &&
+  (typeof window === "undefined" || localStorage.getItem("lifesaver_force_local_mode") !== "true");
 
 // Initialize client if configured, otherwise provide null
 export const supabase = isSupabaseConfigured

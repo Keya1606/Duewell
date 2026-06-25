@@ -1,13 +1,16 @@
 import React from "react";
 import { RouteType } from "../types";
 import { Zap, Clock, Compass, Activity, ArrowRight, ShieldCheck, Heart } from "lucide-react";
+import ProfileMenu from "./ProfileMenu";
 
 interface LandingPageProps {
   onNavigate: (route: RouteType) => void;
   isAuthenticated: boolean;
+  onLogout?: () => void;
+  userEmail?: string;
 }
 
-export default function LandingPage({ onNavigate, isAuthenticated }: LandingPageProps) {
+export default function LandingPage({ onNavigate, isAuthenticated, onLogout, userEmail }: LandingPageProps) {
   return (
     <div className="min-h-screen bg-transparent text-[#232323] flex flex-col font-sans">
       {/* Header */}
@@ -25,13 +28,11 @@ export default function LandingPage({ onNavigate, isAuthenticated }: LandingPage
 
         <div className="flex items-center gap-4">
           {isAuthenticated ? (
-            <button 
-              onClick={() => onNavigate("/app")}
-              className="px-5 py-2.5 bg-[#FF6B4A] hover:bg-[#ff5631] text-white custom-btn shadow-sm text-sm"
-              id="header-goto-app"
-            >
-              Go to Dashboard
-            </button>
+            <ProfileMenu 
+              onNavigate={onNavigate} 
+              onLogout={onLogout || (() => {})} 
+              userEmail={userEmail || ""} 
+            />
           ) : (
             <>
               <button 
@@ -76,7 +77,7 @@ export default function LandingPage({ onNavigate, isAuthenticated }: LandingPage
               className="w-full sm:w-auto px-8 py-4 bg-[#FF6B4A] hover:bg-[#ff5631] text-white font-semibold text-base custom-btn shadow-md hover:shadow-lg hover:-translate-y-0.5 transform flex items-center justify-center gap-2"
               id="hero-cta"
             >
-              Get Started Free <ArrowRight className="w-5 h-5" />
+              {isAuthenticated ? "Go to Dashboard" : "Get Started Free"} <ArrowRight className="w-5 h-5" />
             </button>
             <button
               onClick={() => {

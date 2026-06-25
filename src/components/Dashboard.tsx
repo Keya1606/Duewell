@@ -5,15 +5,191 @@ import { isSupabaseConfigured } from "../lib/supabase";
 import { 
   Zap, LogOut, Plus, Calendar, Clock, CheckCircle2, Circle, Trash2, 
   Sparkles, ListFilter, AlertTriangle, Check, RefreshCw, Eye, Award, HelpCircle,
-  AlertCircle, TrendingUp
+  AlertCircle, TrendingUp, Repeat, Mic, MicOff, Mail, Copy, X
 } from "lucide-react";
 import confetti from "canvas-confetti";
+import { motion, AnimatePresence } from "motion/react";
+import ProfileMenu from "./ProfileMenu";
 
 interface DashboardProps {
   userEmail: string;
   userId: string;
   onLogout: () => void;
   onNavigate: (route: RouteType) => void;
+}
+
+interface ParsedTaskInfo {
+  title: string;
+  date?: string; // YYYY-MM-DD
+  time?: string; // HH:MM
+  detectedDeadlineText?: string;
+}
+
+function parseSpokenText(spokenText: string): ParsedTaskInfo {
+  const text = spokenText.trim();
+  const keywords = ["due on", "due at", "due", "by tomorrow", "by today", "by", "on", "at"];
+  let splitIndex = -1;
+  let matchedKeyword = "";
+  const lowerText = text.toLowerCase();
+  
+  for (const kw of keywords) {
+    const idx = lowerText.lastIndexOf(" " + kw + " ");
+    const startsWithKw = lowerText.startsWith(kw + " ");
+    
+    if (idx !== -1) {
+      if (idx > splitIndex) {
+        splitIndex = idx;
+        matchedKeyword = kw;
+      }
+    } else if (startsWithKw && splitIndex === -1) {
+      splitIndex = 0;
+      matchedKeyword = kw;
+    }
+  }
+  
+  if (splitIndex === -1) {
+    const relativeKeywords = ["tomorrow", "today", "next week"];
+    for (const kw of relativeKeywords) {
+      const idx = lowerText.lastIndexOf(" " + kw);
+      if (idx !== -1 && idx > splitIndex) {
+        splitIndex = idx;
+        matchedKeyword = kw;
+      }
+    }
+  }
+
+  let titlePart = text;
+  let deadlinePart = "";
+
+  if (splitIndex !== -1) {
+    titlePart = text.substring(0, splitIndex).trim();
+    if (splitIndex === 0) {
+      deadlinePart = text.substring(matchedKeyword.length).trim();
+    } else {
+      deadlinePart = text.substring(splitIndex + matchedKeyword.length + 1).trim();
+      if (["tomorrow", "today", "next week"].includes(matchedKeyword)) {
+        deadlinePart = matchedKeyword + " " + deadlinePart;
+      }
+    }
+  }
+
+  const targetDate = new Date();
+  let dateFound = false;
+  let timeFound = false;
+  let parsedDateStr = "";
+  let parsedTimeStr = "23:59";
+  const dlLower = deadlinePart.toLowerCase().trim();
+  
+  if (dlLower) {
+    if (dlLower.includes("today")) {
+      dateFound = true;
+      targetDate.setDate(targetDate.getDate());
+    } else if (dlLower.includes("tomorrow")) {
+      dateFound = true;
+      targetDate.setDate(targetDate.getDate() + 1);
+    } else if (dlLower.includes("day after tomorrow")) {
+      dateFound = true;
+      targetDate.setDate(targetDate.getDate() + 2);
+    } else {
+      const daysOfWeek = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+      let foundDayIdx = -1;
+      for (let i = 0; i < 7; i++) {
+        if (dlLower.includes(daysOfWeek[i])) {
+          foundDayIdx = i;
+          break;
+        }
+      }
+      
+      if (foundDayIdx !== -1) {
+        dateFound = true;
+        const currentDay = targetDate.getDay();
+        let daysToAdd = foundDayIdx - currentDay;
+        if (daysToAdd <= 0) {
+          daysToAdd += 7;
+        }
+        if (dlLower.includes("next")) {
+          if (foundDayIdx - currentDay > 0) {
+            daysToAdd += 7;
+          }
+        }
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+      } else {
+        const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+        const shortMonths = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+        
+        let foundMonthIdx = -1;
+        for (let i = 0; i < 12; i++) {
+          if (dlLower.includes(months[i]) || dlLower.includes(shortMonths[i])) {
+            foundMonthIdx = i;
+            break;
+          }
+        }
+        
+        if (foundMonthIdx !== -1) {
+          dateFound = true;
+          targetDate.setMonth(foundMonthIdx);
+          const dayRegex = /\b(\d{1,2})(st|nd|rd|th)?\b/;
+          const match = dlLower.match(dayRegex);
+          if (match) {
+            targetDate.setDate(parseInt(match[1], 10));
+          }
+          const yearRegex = /\b(202\d)\b/;
+          const yearMatch = dlLower.match(yearRegex);
+          if (yearMatch) {
+            targetDate.setFullYear(parseInt(yearMatch[1], 10));
+          } else {
+            const now = new Date();
+            if (targetDate.getTime() < now.getTime() - 86400000) {
+              targetDate.setFullYear(now.getFullYear() + 1);
+            }
+          }
+        }
+      }
+    }
+    
+    if (dlLower.includes("noon")) {
+      timeFound = true;
+      parsedTimeStr = "12:00";
+    } else if (dlLower.includes("midnight")) {
+      timeFound = true;
+      parsedTimeStr = "00:00";
+    } else {
+      const timeRegex = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
+      const timeMatch = dlLower.match(timeRegex);
+      if (timeMatch) {
+        timeFound = true;
+        let hour = parseInt(timeMatch[1], 10);
+        const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+        const ampm = timeMatch[3] ? timeMatch[3].toLowerCase() : "";
+        if (ampm === "pm" && hour < 12) hour += 12;
+        if (ampm === "am" && hour === 12) hour = 0;
+        const hourStr = hour < 10 ? `0${hour}` : `${hour}`;
+        const minStr = minute < 10 ? `0${minute}` : `${minute}`;
+        parsedTimeStr = `${hourStr}:${minStr}`;
+      }
+    }
+  }
+
+  if (dateFound) {
+    const yyyy = targetDate.getFullYear();
+    const mm = String(targetDate.getMonth() + 1).padStart(2, "0");
+    const dd = String(targetDate.getDate()).padStart(2, "0");
+    parsedDateStr = `${yyyy}-${mm}-${dd}`;
+  }
+
+  titlePart = titlePart.replace(/\b(by|due|on|at|due on|due at)$/i, "").trim();
+  titlePart = titlePart.replace(/\s+/g, " ");
+
+  if (titlePart.length > 0) {
+    titlePart = titlePart.charAt(0).toUpperCase() + titlePart.slice(1);
+  }
+
+  return {
+    title: titlePart,
+    date: dateFound ? parsedDateStr : undefined,
+    time: timeFound ? parsedTimeStr : undefined,
+    detectedDeadlineText: deadlinePart || undefined
+  };
 }
 
 export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: DashboardProps) {
@@ -27,6 +203,7 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
   const [recommendations, setRecommendations] = useState<string[]>([]);
   const [satisfyingLine, setSatisfyingLine] = useState("");
   const [planMantra, setPlanMantra] = useState("");
+  const [showCalendarView, setShowCalendarView] = useState(false);
   
   // Loading & Error States
   const [loading, setLoading] = useState(true);
@@ -34,6 +211,12 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
   const [aiPlanning, setAiPlanning] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionSuccess, setActionSuccess] = useState("");
+  
+  // Non-happy-path error tracking states
+  const [initialLoadError, setInitialLoadError] = useState(false);
+  const [aiPrioritizeError, setAiPrioritizeError] = useState(false);
+  const [aiPlanningError, setAiPlanningError] = useState(false);
+  const [aiDraftError, setAiDraftError] = useState<Record<string, boolean>>({});
 
   // Filter & Form States
   const [filter, setFilter] = useState<"all" | "pending" | "completed" | "ai">("all");
@@ -52,9 +235,142 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
   // New Habit Form
   const [newHabitName, setNewHabitName] = useState("");
   const [showHabitForm, setShowHabitForm] = useState(false);
+  const [markAsHabitInForm, setMarkAsHabitInForm] = useState(false);
+  const [celebration, setCelebration] = useState<{ show: boolean; habitName: string; days: number } | null>(null);
 
   // Walkthrough Onboarding State
   const [walkthroughStep, setWalkthroughStep] = useState<number | null>(null);
+
+  // Speech Recognition State
+  const [isListening, setIsListening] = useState(false);
+  const [recognition, setRecognition] = useState<any>(null);
+  const [speechFeedback, setSpeechFeedback] = useState("");
+
+  useEffect(() => {
+    const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognitionAPI) {
+      const rec = new SpeechRecognitionAPI();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = "en-US";
+
+      rec.onstart = () => {
+        setIsListening(true);
+        setSpeechFeedback("Listening... Speak your task now!");
+      };
+
+      rec.onerror = (event: any) => {
+        console.error("Speech recognition error", event.error);
+        setIsListening(false);
+        if (event.error === "not-allowed") {
+          setActionError("Microphone permission denied. Please enable mic access.");
+          setSpeechFeedback("Permission denied.");
+        } else if (event.error === "no-speech") {
+          setSpeechFeedback("No speech detected. Please try again.");
+        } else {
+          setSpeechFeedback(`Speech error: ${event.error}`);
+        }
+      };
+
+      rec.onend = () => {
+        setIsListening(false);
+      };
+
+      rec.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          setSpeechFeedback(`Heard: "${transcript}"`);
+          handleSpokenText(transcript);
+        }
+      };
+
+      setRecognition(rec);
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognition) {
+      setActionError("Speech recognition is not supported in this browser. Try Chrome, Edge or Safari!");
+      return;
+    }
+
+    if (isListening) {
+      recognition.stop();
+    } else {
+      setActionError("");
+      try {
+        recognition.start();
+      } catch (err) {
+        console.error("Failed to start speech recognition", err);
+      }
+    }
+  };
+
+  const handleSpokenText = (transcript: string) => {
+    const parsed = parseSpokenText(transcript);
+    
+    if (parsed.title) {
+      setTitle(parsed.title);
+    }
+    
+    if (parsed.date) {
+      setDeadlineDate(parsed.date);
+      setActionSuccess(`Parsed: "${parsed.title}" due on ${parsed.date}`);
+    } else {
+      const todayStr = new Date().toISOString().split("T")[0];
+      setDeadlineDate(todayStr);
+      setActionSuccess(`Parsed: "${parsed.title}" (Deadline not specified, set to today)`);
+    }
+
+    if (parsed.time) {
+      setDeadlineTime(parsed.time);
+    }
+
+    setShowAddForm(true);
+  };
+
+  // State for Extension request email drafts
+  const [extensionDrafts, setExtensionDrafts] = useState<Record<string, string>>({});
+  const [loadingDrafts, setLoadingDrafts] = useState<Record<string, boolean>>({});
+  const [copiedDrafts, setCopiedDrafts] = useState<Record<string, boolean>>({});
+
+  const handleGenerateExtensionDraft = async (task: Task) => {
+    setLoadingDrafts(prev => ({ ...prev, [task.id]: true }));
+    setAiDraftError(prev => ({ ...prev, [task.id]: false }));
+    setActionError("");
+    try {
+      const response = await fetch("/api/generate-extension-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskTitle: task.title,
+          deadline: task.deadline,
+          category: task.category,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to generate draft");
+      }
+      const data = await response.json();
+      setExtensionDrafts(prev => ({ ...prev, [task.id]: data.draft }));
+      setAiDraftError(prev => ({ ...prev, [task.id]: false }));
+      setActionSuccess(`Draft extension request for "${task.title}" generated successfully!`);
+    } catch (err: any) {
+      console.error(err);
+      setAiDraftError(prev => ({ ...prev, [task.id]: true }));
+      setActionError(`Could not generate an extension draft for "${task.title}". Gemini might be temporarily overloaded.`);
+    } finally {
+      setLoadingDrafts(prev => ({ ...prev, [task.id]: false }));
+    }
+  };
+
+  const handleCopyDraft = (taskId: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedDrafts(prev => ({ ...prev, [taskId]: true }));
+    setTimeout(() => {
+      setCopiedDrafts(prev => ({ ...prev, [taskId]: false }));
+    }, 2000);
+  };
 
   // Tick current time every second
   useEffect(() => {
@@ -62,70 +378,75 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
     return () => clearInterval(timer);
   }, []);
 
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+      setInitialLoadError(false);
+      setActionError("");
+      const fetchedTasks = await dataService.getTasks(userId);
+      const fetchedHabits = await dataService.getHabits(userId);
+      const savedPlan = await dataService.getDailyPlan(userId);
+      
+      // Restore AI enriched tasks if cached
+      const cachedEnriched = localStorage.getItem(`ai_enriched_tasks_${userId}`);
+      if (cachedEnriched) {
+        const parsed = JSON.parse(cachedEnriched) as Task[];
+        // Merge dynamic AI properties into fetched tasks
+        const merged = fetchedTasks.map(t => {
+          const aiData = parsed.find(pt => pt.id === t.id);
+          if (aiData) {
+            return {
+              ...t,
+              aiPriority: aiData.aiPriority,
+              momentumCategory: aiData.momentumCategory,
+              stressScore: aiData.stressScore,
+              aiTip: aiData.aiTip,
+              riskStatus: aiData.riskStatus,
+              priorityRank: aiData.priorityRank,
+              suggestedStartTime: aiData.suggestedStartTime,
+              suggestedEndTime: aiData.suggestedEndTime,
+              riskLevel: aiData.riskLevel
+            };
+          }
+          return t;
+        });
+        setTasks(merged);
+      } else {
+        setTasks(fetchedTasks);
+      }
+
+      setHabits(fetchedHabits);
+      
+      if (savedPlan) {
+        if (Array.isArray(savedPlan.plan_data)) {
+          setCurrentPlan(savedPlan.plan_data);
+          setRecommendations([]);
+        } else if (savedPlan.plan_data && typeof savedPlan.plan_data === "object") {
+          const planObj = savedPlan.plan_data as any;
+          setCurrentPlan(planObj.schedule || []);
+          setRecommendations(planObj.recommendations || []);
+        }
+        setPlanMantra(savedPlan.encouragement);
+      }
+
+      // Trigger onboarding walkthrough if first login after signup
+      const isFirst = localStorage.getItem("lifesaver_is_first_signup");
+      if (isFirst === "true") {
+        setWalkthroughStep(1); // Start first step
+        localStorage.removeItem("lifesaver_is_first_signup");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setInitialLoadError(true);
+      setActionError("We had a small hiccup connecting to our database server. You can retry anytime.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Fetch initial data
   useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        const fetchedTasks = await dataService.getTasks(userId);
-        const fetchedHabits = await dataService.getHabits(userId);
-        const savedPlan = await dataService.getDailyPlan(userId);
-        
-        // Restore AI enriched tasks if cached
-        const cachedEnriched = localStorage.getItem(`ai_enriched_tasks_${userId}`);
-        if (cachedEnriched) {
-          const parsed = JSON.parse(cachedEnriched) as Task[];
-          // Merge dynamic AI properties into fetched tasks
-          const merged = fetchedTasks.map(t => {
-            const aiData = parsed.find(pt => pt.id === t.id);
-            if (aiData) {
-              return {
-                ...t,
-                aiPriority: aiData.aiPriority,
-                momentumCategory: aiData.momentumCategory,
-                stressScore: aiData.stressScore,
-                aiTip: aiData.aiTip,
-                riskStatus: aiData.riskStatus,
-                priorityRank: aiData.priorityRank,
-                suggestedStartTime: aiData.suggestedStartTime,
-                suggestedEndTime: aiData.suggestedEndTime,
-                riskLevel: aiData.riskLevel
-              };
-            }
-            return t;
-          });
-          setTasks(merged);
-        } else {
-          setTasks(fetchedTasks);
-        }
-
-        setHabits(fetchedHabits);
-        
-        if (savedPlan) {
-          if (Array.isArray(savedPlan.plan_data)) {
-            setCurrentPlan(savedPlan.plan_data);
-            setRecommendations([]);
-          } else if (savedPlan.plan_data && typeof savedPlan.plan_data === "object") {
-            const planObj = savedPlan.plan_data as any;
-            setCurrentPlan(planObj.schedule || []);
-            setRecommendations(planObj.recommendations || []);
-          }
-          setPlanMantra(savedPlan.encouragement);
-        }
-
-        // Trigger onboarding walkthrough if first login after signup
-        const isFirst = localStorage.getItem("lifesaver_is_first_signup");
-        if (isFirst === "true") {
-          setWalkthroughStep(1); // Start first step
-          localStorage.removeItem("lifesaver_is_first_signup");
-        }
-      } catch (err: any) {
-        setActionError("Could not load your records. Please refresh the page.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
+    loadDashboardData();
   }, [userId]);
 
   // Clean success/error notifications after some time
@@ -150,7 +471,7 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
     try {
       const combinedDeadline = new Date(`${deadlineDate}T${deadlineTime}`).toISOString();
       const created = await dataService.createTask(userId, {
-        title,
+        title: title.trim(),
         description,
         deadline: combinedDeadline,
         estimated_minutes: estimatedMinutes,
@@ -161,6 +482,19 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
 
       setTasks(prev => [...prev, created]);
       setActionSuccess(`Added task: "${title}"`);
+
+      // If marked as daily habit, create a habit too
+      if (markAsHabitInForm) {
+        try {
+          const matchingHabit = habits.find(h => h.name.toLowerCase().trim() === title.toLowerCase().trim());
+          if (!matchingHabit) {
+            const createdHabit = await dataService.createHabit(userId, title.trim());
+            setHabits(prev => [...prev, createdHabit]);
+          }
+        } catch (habitErr) {
+          console.error("Failed to auto-create habit for task", habitErr);
+        }
+      }
       
       // Reset form
       setTitle("");
@@ -171,6 +505,7 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
       setPriority("medium");
       setDifficulty("medium");
       setCategory("Work");
+      setMarkAsHabitInForm(false);
       setShowAddForm(false);
     } catch (err: any) {
       setActionError("Failed to add task. Try again.");
@@ -251,14 +586,71 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
     }
   };
 
-  const handleToggleHabit = async (habitId: string) => {
+  const handleToggleHabitForDate = async (habitId: string, dateStr: string) => {
     try {
-      const updated = await dataService.toggleHabitForToday(userId, habitId);
+      const habitToToggle = habits.find(h => h.id === habitId);
+      if (!habitToToggle) return;
+      const isCurrentlyCompleted = habitToToggle.completed_dates.includes(dateStr);
+      
+      const updated = await dataService.toggleHabitForDate(userId, habitId, dateStr);
       setHabits(prev => prev.map(h => h.id === habitId ? updated : h));
-      setActionSuccess("Habit updated! Keep that streak burning!");
+      
+      // Auto-toggle matching task if date is today
+      const todayStr = new Date().toISOString().split("T")[0];
+      if (dateStr === todayStr) {
+        const matchingTask = tasks.find(t => t.title.toLowerCase().trim() === habitToToggle.name.toLowerCase().trim());
+        if (matchingTask) {
+          const expectedStatus = !isCurrentlyCompleted ? "completed" : "pending";
+          if (matchingTask.status !== expectedStatus) {
+            await dataService.updateTask(userId, matchingTask.id, { 
+              status: expectedStatus as any,
+              completed_at: expectedStatus === "completed" ? new Date().toISOString() : null 
+            });
+            const updatedTask: Task = { 
+              ...matchingTask, 
+              status: expectedStatus as any,
+              completed_at: expectedStatus === "completed" ? new Date().toISOString() : null 
+            };
+            setTasks(prev => prev.map(t => t.id === matchingTask.id ? updatedTask : t));
+          }
+        }
+      }
+
+      // If we newly checked it
+      if (!isCurrentlyCompleted) {
+        if (updated.streak === 3 || updated.streak === 7) {
+          confetti({
+            particleCount: 150,
+            spread: 80,
+            origin: { y: 0.6 },
+            colors: ["#FF6B4A", "#4CAF82", "#FFD700", "#3B82F6"]
+          });
+          setCelebration({
+            show: true,
+            habitName: updated.name,
+            days: updated.streak
+          });
+          
+          setTimeout(() => {
+            setCelebration(prev => {
+              if (prev && prev.days === updated.streak && prev.habitName === updated.name) {
+                return null;
+              }
+              return prev;
+            });
+          }, 4500);
+        }
+      }
+      
+      setActionSuccess("Habit tracked! Keeping that streak alive!");
     } catch (err) {
       setActionError("Failed to toggle habit.");
     }
+  };
+
+  const handleToggleHabit = async (habitId: string) => {
+    const todayStr = new Date().toISOString().split("T")[0];
+    await handleToggleHabitForDate(habitId, todayStr);
   };
 
   const handleDeleteHabit = async (habitId: string) => {
@@ -279,6 +671,7 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
     }
 
     setAiPrioritizing(true);
+    setAiPrioritizeError(false);
     setActionError("");
 
     try {
@@ -317,13 +710,15 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
       
       // Auto-set filter to 'ai' to let user see prioritized list
       setFilter("ai");
+      setAiPrioritizeError(false);
       setActionSuccess("AI Prioritization complete! Look at your curated list.");
       if (coachingMsg) {
         setPlanMantra(coachingMsg);
       }
     } catch (err: any) {
       console.error(err);
-      setActionError("Failed to connect with Gemini AI. Check your GEMINI_API_KEY.");
+      setAiPrioritizeError(true);
+      setActionError("Failed to reach Gemini AI. Please check your internet connection or verify your GEMINI_API_KEY.");
     } finally {
       setAiPrioritizing(false);
     }
@@ -338,6 +733,7 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
     }
 
     setAiPlanning(true);
+    setAiPlanningError(false);
     setActionError("");
 
     try {
@@ -399,10 +795,12 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
         plan_date: new Date().toISOString().split("T")[0]
       });
 
+      setAiPlanningError(false);
       setActionSuccess("Your personalized daily plan, recommendations, and risk tips are ready!");
     } catch (err) {
       console.error(err);
-      setActionError("Failed to schedule tasks. Please verify your connection.");
+      setAiPlanningError(true);
+      setActionError("Failed to design your daily schedule. Gemini might be sleeping. Let's try again!");
     } finally {
       setAiPlanning(false);
     }
@@ -423,6 +821,31 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
       return "Tight";
     }
     return "On Track";
+  };
+
+  const parseTimeStr = (timeStr: string): { hour: number; minute: number } | null => {
+    if (!timeStr) return null;
+    const match = timeStr.trim().match(/^(\d+):(\d+)\s*(AM|PM)$/i);
+    if (!match) return null;
+    let hour = parseInt(match[1], 10);
+    const minute = parseInt(match[2], 10);
+    const ampm = match[3].toUpperCase();
+    if (ampm === "PM" && hour < 12) hour += 12;
+    if (ampm === "AM" && hour === 12) hour = 0;
+    return { hour, minute };
+  };
+
+  const get7DayWindow = () => {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split("T")[0];
+      const label = d.toLocaleDateString("en-US", { weekday: "short" });
+      const singleChar = label.substring(0, 1);
+      days.push({ dateStr, label, singleChar });
+    }
+    return days;
   };
 
   // Calculations for Momentum Ring
@@ -608,13 +1031,7 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
               <HelpCircle className="w-4 h-4" />
             </button>
 
-            <button
-              onClick={onLogout}
-              className="px-3.5 py-1.5 text-red-500 hover:bg-red-50 hover:text-red-600 font-semibold rounded-lg border border-transparent transition-all flex items-center gap-1.5"
-              id="logout-btn"
-            >
-              <LogOut className="w-3.5 h-3.5" /> Log out
-            </button>
+            <ProfileMenu onNavigate={onNavigate} onLogout={onLogout} userEmail={userEmail} />
           </div>
         </div>
       </header>
@@ -857,27 +1274,72 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
               >
                 <Plus className="w-3.5 h-3.5" /> Add Task
               </button>
+
+              {/* Voice Add Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddForm(true);
+                  toggleListening();
+                }}
+                className={`px-3 py-2 text-xs font-semibold custom-btn shadow-xs flex items-center gap-1.5 border transition-all cursor-pointer ${
+                  isListening 
+                    ? "bg-red-50 text-red-600 border-red-200 animate-pulse" 
+                    : "bg-white hover:bg-orange-50 text-[#FF6B4A] hover:text-[#ff5631] border-[#FF6B4A]/40"
+                }`}
+                title="Speak to add a task"
+                id="speech-recognition-btn-header"
+              >
+                {isListening ? <MicOff className="w-3.5 h-3.5 text-red-500 animate-pulse" /> : <Mic className="w-3.5 h-3.5" />}
+                <span>{isListening ? "Listening..." : "Speak Task"}</span>
+              </button>
             </div>
           </div>
 
           {/* Add Task Expandable Form */}
           {showAddForm && (
             <div className="custom-card p-6 animate-fade-in" id="add-task-form-container">
-              <h4 className="font-outfit font-bold text-lg mb-4 text-[#FF6B4A]">Register a High-Stakes Deadline</h4>
+              <h4 className="font-outfit font-bold text-lg mb-2 text-[#FF6B4A]">Register a High-Stakes Deadline</h4>
+              
+              {speechFeedback && (
+                <div className="text-xs font-semibold px-3 py-1.5 bg-orange-50 border border-orange-100 rounded-lg text-[#FF6B4A] flex items-center gap-2 animate-pulse mb-4">
+                  <span className={`w-2 h-2 rounded-full ${isListening ? 'bg-red-500 animate-ping' : 'bg-orange-400'}`}></span>
+                  <span>{speechFeedback}</span>
+                </div>
+              )}
+
               <form onSubmit={handleCreateTask} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   
                   {/* Title */}
                   <div className="md:col-span-2">
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Task Title</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Finish final chemistry paper citations"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      className="w-full px-4 py-2 bg-[#FAFAF9] border border-[#ECE9E3] focus:border-[#FF6B4A] outline-none text-sm rounded-lg"
-                      required
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">Task Title</label>
+                      <span className="text-[10px] text-gray-400 italic">Try speaking: "Finish chemistry paper by tomorrow at 5 PM"</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. Finish final chemistry paper citations"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        className="flex-1 px-4 py-2 bg-[#FAFAF9] border border-[#ECE9E3] focus:border-[#FF6B4A] outline-none text-sm rounded-lg"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={toggleListening}
+                        className={`px-3.5 py-2 rounded-lg border flex items-center justify-center transition-all cursor-pointer ${
+                          isListening 
+                            ? "bg-red-50 text-red-600 border-red-200 animate-pulse" 
+                            : "bg-[#FAFAF9] border-[#ECE9E3] text-gray-500 hover:text-[#FF6B4A] hover:border-[#FF6B4A]/50"
+                        }`}
+                        title="Speak to add task"
+                        id="speech-recognition-btn-form"
+                      >
+                        {isListening ? <MicOff className="w-4 h-4 text-red-500 animate-pulse" /> : <Mic className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Description */}
@@ -974,6 +1436,21 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
                     </select>
                   </div>
 
+                  {/* Mark as Daily Habit Checkbox */}
+                  <div className="md:col-span-2 flex items-center gap-2 pt-2 border-t border-[#ECE9E3]/50">
+                    <input
+                      type="checkbox"
+                      id="markAsHabitInForm"
+                      checked={markAsHabitInForm}
+                      onChange={(e) => setMarkAsHabitInForm(e.target.checked)}
+                      className="w-4 h-4 text-[#FF6B4A] focus:ring-[#FF6B4A] border-gray-300 rounded cursor-pointer accent-[#FF6B4A]"
+                    />
+                    <label htmlFor="markAsHabitInForm" className="text-xs font-bold text-gray-700 cursor-pointer select-none flex items-center gap-1.5">
+                      <Repeat className="w-3.5 h-3.5 text-[#FF6B4A]" />
+                      <span>Mark as Daily Habit (also creates a sustained 7-day tracker)</span>
+                    </label>
+                  </div>
+
                 </div>
 
                 <div className="pt-2 flex justify-end gap-3">
@@ -997,28 +1474,111 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
           )}
 
           {/* Loader or Placeholder state for task empty list */}
-          {loading ? (
-            <div className="py-20 text-center text-gray-400">
-              <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-4 text-[#FF6B4A]" />
-              <p className="font-light text-sm">Organizing your rescue desk...</p>
-            </div>
-          ) : getFilteredTasks().length === 0 ? (
-            <div className="custom-card p-12 text-center bg-white/40 backdrop-blur-md">
-              <CheckCircle2 className="w-12 h-12 text-[#4CAF82] mx-auto mb-4" />
-              <h4 className="font-outfit text-lg font-bold mb-1">Rescue Zone Clear</h4>
-              <p className="text-gray-500 text-sm font-light max-w-sm mx-auto mb-6">
-                You have no tasks yet. Add one to get your day moving.
-              </p>
+          {initialLoadError ? (
+            <div className="custom-card p-8 border border-red-200 bg-red-50/50 text-center space-y-4">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto text-red-500">
+                <AlertCircle className="w-6 h-6 animate-bounce" />
+              </div>
+              <div className="space-y-1 max-w-md mx-auto">
+                <h4 className="font-outfit text-base font-bold text-gray-800">We couldn't reach your Rescue Desk data</h4>
+                <p className="text-xs text-gray-500 font-light leading-relaxed">
+                  There was a minor hiccup loading your tasks. Don't worry, your progress is safe. Let's try refreshing the connection!
+                </p>
+              </div>
               <button
-                onClick={() => setShowAddForm(true)}
-                className="px-4 py-2 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-xs font-semibold custom-btn shadow-xs"
+                onClick={loadDashboardData}
+                className="px-5 py-2 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-xs font-bold custom-btn shadow-sm"
               >
-                Add task
+                Retry Loading Records
               </button>
             </div>
+          ) : loading ? (
+            <div className="custom-card p-12 text-center bg-white/45 backdrop-blur-md border border-white/30 space-y-4">
+              <div className="relative w-16 h-16 mx-auto">
+                <div className="absolute inset-0 rounded-full border-4 border-[#FF6B4A]/20 border-t-[#FF6B4A] animate-spin" />
+                <div className="absolute inset-2 rounded-full border-4 border-[#F2A93B]/20 border-b-[#F2A93B] animate-spin" style={{ animationDirection: 'reverse' }} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-gray-700 animate-pulse">Setting up your Rescue Station...</p>
+                <p className="text-xs text-gray-400 font-light">Calmly fetching your high-stakes tasks and habits.</p>
+              </div>
+            </div>
           ) : (
-            /* Tasks List rendering */
-            <div className="space-y-4" id="tasks-list">
+            <>
+              {/* Calm loader while Gemini is prioritizing tasks */}
+              {aiPrioritizing && (
+                <div className="custom-card p-6 border border-[#FF6B4A]/30 bg-[#FF6B4A]/5 relative overflow-hidden animate-pulse mb-6">
+                  <div className="absolute top-0 left-0 h-1 bg-gradient-to-r from-orange-400 via-[#FF6B4A] to-amber-500 animate-[shimmer_2s_infinite]" style={{ width: "200%" }} />
+                  <div className="flex items-start gap-4">
+                    <div className="p-3 bg-white/80 rounded-full text-[#FF6B4A] shadow-xs flex items-center justify-center animate-spin">
+                      <Sparkles className="w-5 h-5 fill-[#FF6B4A] stroke-none animate-pulse" />
+                    </div>
+                    <div className="space-y-2">
+                      <h4 className="font-outfit text-sm font-bold text-gray-800">Gemini is calmly reviewing your high-stakes tasks...</h4>
+                      <p className="text-xs text-gray-500 font-light leading-relaxed">
+                        Take a deep breath. We are analyzing deadlines, estimated workloads, and finding the best "quick-win" momentum items to clear your head.
+                      </p>
+                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-[#FF6B4A] uppercase tracking-wider">
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        <span>Curating stress-reducing priorities</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Retry-able Prioritization Error banner */}
+              {aiPrioritizeError && (
+                <div className="custom-card p-5 border border-red-200 bg-red-50/40 mb-6 flex flex-col sm:flex-row items-center sm:items-start justify-between gap-4">
+                  <div className="flex gap-3 text-left">
+                    <div className="p-1.5 bg-red-100 text-red-500 rounded-lg shrink-0 h-8 w-8 flex items-center justify-center">
+                      <AlertCircle className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="font-outfit text-xs font-bold text-gray-800">Gemini Prioritization timed out</h4>
+                      <p className="text-[11px] text-gray-500 font-light leading-relaxed mt-0.5">
+                        We couldn't organize your task list with AI. You can still manage them normally, or retry.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => setAiPrioritizeError(false)}
+                      className="px-2.5 py-1.5 bg-white border border-gray-200 text-gray-500 hover:text-gray-700 text-[11px] font-semibold custom-btn"
+                    >
+                      Dismiss
+                    </button>
+                    <button
+                      onClick={handleAIPrioritisation}
+                      className="px-3 py-1.5 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-[11px] font-bold custom-btn flex items-center gap-1"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Retry sorting
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {getFilteredTasks().length === 0 ? (
+                <div className="custom-card p-10 text-center bg-white/40 border border-[#ECE9E3]/50 space-y-4">
+                  <div className="w-14 h-14 bg-emerald-50 text-[#4CAF82] rounded-full flex items-center justify-center mx-auto border border-emerald-100">
+                    <CheckCircle2 className="w-7 h-7" />
+                  </div>
+                  <div className="space-y-1.5 max-w-sm mx-auto">
+                    <h4 className="font-outfit text-base font-bold text-gray-800">Rescue Zone Clear!</h4>
+                    <p className="text-xs text-gray-500 font-light leading-relaxed">
+                      All quiet on the deadline front! Use the spacing to restore your energy, or register a new priority task to take steady command of your day.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowAddForm(true)}
+                    className="px-4 py-2 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-xs font-semibold custom-btn shadow-xs"
+                  >
+                    Add High-Stakes Task
+                  </button>
+                </div>
+              ) : (
+                /* Tasks List rendering */
+                <div className="space-y-4" id="tasks-list">
               {getFilteredTasks().map((task) => {
                 const deadlineData = formatDeadline(task.deadline);
                 
@@ -1100,12 +1660,74 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
                               );
                             })()}
 
+                            {/* Draft Extension Request Button for Overdue Risk */}
+                            {getTaskRiskStatus(task) === "Overdue Risk" && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (extensionDrafts[task.id]) {
+                                    // Toggle off if already open
+                                    setExtensionDrafts(prev => {
+                                      const copy = { ...prev };
+                                      delete copy[task.id];
+                                      return copy;
+                                    });
+                                  } else {
+                                    handleGenerateExtensionDraft(task);
+                                  }
+                                }}
+                                disabled={loadingDrafts[task.id]}
+                                className="px-2 py-0.5 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 border border-red-200 hover:border-red-300 rounded text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50"
+                                title="Draft extension request using Gemini AI"
+                                id={`draft-extension-btn-${task.id}`}
+                              >
+                                {loadingDrafts[task.id] ? (
+                                  <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                                ) : (
+                                  <Mail className="w-2.5 h-2.5" />
+                                )}
+                                {loadingDrafts[task.id] ? "Drafting..." : extensionDrafts[task.id] ? "Hide Draft" : "Draft Extension"}
+                              </button>
+                            )}
+
                             {/* Dynamic Urgency Label Badge */}
                             {deadlineData.urgencyLabel && (
                               <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest tabular-nums ${deadlineData.urgencyClass}`}>
                                 {deadlineData.urgencyLabel}
                               </span>
                             )}
+
+                            {/* Daily Habit integration */}
+                            {(() => {
+                              const matchingHabit = habits.find(h => h.name.toLowerCase().trim() === task.title.toLowerCase().trim());
+                              if (matchingHabit) {
+                                return (
+                                  <span className="px-2 py-0.5 bg-orange-50 border border-orange-100 text-[#FF6B4A] rounded text-[10px] font-bold flex items-center gap-1">
+                                    <Repeat className="w-2.5 h-2.5" /> Daily Habit
+                                  </span>
+                                );
+                              } else {
+                                return (
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      try {
+                                        const created = await dataService.createHabit(userId, task.title);
+                                        setHabits(prev => [...prev, created]);
+                                        setActionSuccess(`"${task.title}" is now tracked as a daily habit!`);
+                                      } catch (err) {
+                                        setActionError("Failed to register habit.");
+                                      }
+                                    }}
+                                    className="px-2 py-0.5 hover:bg-orange-50 hover:text-[#FF6B4A] text-gray-400 border border-gray-200 hover:border-orange-200 rounded text-[10px] font-medium flex items-center gap-1 transition-all cursor-pointer"
+                                    title="Mark as a daily repeating habit"
+                                    id={`mark-habit-task-${task.id}`}
+                                  >
+                                    <Plus className="w-2.5 h-2.5" /> Mark as Daily Habit
+                                  </button>
+                                );
+                              }
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1123,6 +1745,55 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
                       </div>
 
                     </div>
+
+                    {/* If it's a daily habit, render the 7-day tracker */}
+                    {(() => {
+                      const matchingHabit = habits.find(h => h.name.toLowerCase().trim() === task.title.toLowerCase().trim());
+                      if (matchingHabit) {
+                        return (
+                          <div className="mt-4 pt-3 border-t border-gray-100/60" id={`task-habit-tracker-${task.id}`}>
+                            <div className="text-[10px] text-gray-400 font-semibold mb-2 flex items-center justify-between">
+                              <span>WEEKLY HABIT PROGRESS</span>
+                              <span className="text-[#FF6B4A] tabular-nums font-bold flex items-center gap-1">
+                                <Repeat className="w-3 h-3" />
+                                {matchingHabit.streak} day streak
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-start gap-4">
+                              {get7DayWindow().map(({ dateStr, label, singleChar }) => {
+                                const isCompleted = matchingHabit.completed_dates.includes(dateStr);
+                                const isToday = dateStr === new Date().toISOString().split("T")[0];
+                                return (
+                                  <button
+                                    key={dateStr}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleHabitForDate(matchingHabit.id, dateStr);
+                                    }}
+                                    className="flex flex-col items-center gap-1 group cursor-pointer focus:outline-none"
+                                    title={`${label} (${dateStr}): ${isCompleted ? 'Done' : 'Not done'}`}
+                                  >
+                                    <span className={`text-[9px] font-bold ${isToday ? "text-[#FF6B4A]" : "text-gray-400"} uppercase`}>
+                                      {singleChar}
+                                    </span>
+                                    <div 
+                                      className={`w-3.5 h-3.5 rounded-full transition-all duration-200 flex items-center justify-center ${
+                                        isCompleted 
+                                          ? "bg-[#FF6B4A] shadow-xs scale-110" 
+                                          : "border-1.5 border-gray-300 bg-transparent group-hover:border-[#FF6B4A]"
+                                      }`}
+                                    >
+                                      {isCompleted && <Check className="w-2.5 h-2.5 text-white stroke-3" />}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
 
                     {/* AI Enriched Section (Only displays if AI prioritized has run) */}
                     {(task.aiTip || task.momentumCategory || task.stressScore || task.priorityRank || task.suggestedStartTime || task.riskLevel) && task.status !== "completed" && (
@@ -1185,6 +1856,90 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
                       </div>
                     )}
 
+                    {/* Retry-able Drafting Error block */}
+                    {aiDraftError[task.id] && (
+                      <div className="mt-4 pt-4 border-t border-red-100 bg-red-50/20 p-3 rounded-xl animate-fade-in flex flex-col sm:flex-row items-center sm:items-start justify-between gap-3" id={`draft-error-${task.id}`}>
+                        <div className="flex gap-2 text-left">
+                          <AlertCircle className="w-4 h-4 text-[#E2574C] mt-0.5 shrink-0 animate-bounce" />
+                          <div>
+                            <h5 className="text-xs font-bold text-gray-800">Drafting assistance failed</h5>
+                            <p className="text-[10px] text-gray-500 font-light leading-relaxed mt-0.5">
+                              Gemini was unable to design your extension email. Want to try once more?
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleGenerateExtensionDraft(task)}
+                          className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold shrink-0 flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                        >
+                          <RefreshCw className="w-2.5 h-2.5" /> Retry Draft
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Generated Extension Request Draft Block */}
+                    {extensionDrafts[task.id] && (
+                      <div className="mt-4 pt-4 border-t border-red-100 bg-red-50/10 p-4 rounded-xl animate-fade-in" id={`extension-draft-box-${task.id}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-red-600">
+                            <Mail className="w-3.5 h-3.5" />
+                            <span>Gemini Draft Extension Request</span>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setExtensionDrafts(prev => {
+                                const copy = { ...prev };
+                                delete copy[task.id];
+                                return copy;
+                              });
+                            }}
+                            className="p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-600 cursor-pointer"
+                            title="Close Draft"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        
+                        <p className="text-[11px] text-gray-500 mb-2">
+                          Here is a polite request draft prepared for your deadline. Feel free to tweak it before copying!
+                        </p>
+
+                        <textarea
+                          value={extensionDrafts[task.id]}
+                          onChange={(e) => {
+                            const newText = e.target.value;
+                            setExtensionDrafts(prev => ({ ...prev, [task.id]: newText }));
+                          }}
+                          rows={6}
+                          className="w-full text-xs font-mono p-3 bg-white border border-red-100 focus:border-red-400 outline-none rounded-lg text-gray-700 leading-relaxed resize-y"
+                          id={`extension-draft-textarea-${task.id}`}
+                        />
+
+                        <div className="flex items-center justify-between mt-3">
+                          <span className="text-[10px] text-gray-400 italic">
+                            * Remember to customize [Your Name]
+                          </span>
+                          <button
+                            onClick={() => handleCopyDraft(task.id, extensionDrafts[task.id])}
+                            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                            id={`copy-draft-btn-${task.id}`}
+                          >
+                            {copiedDrafts[task.id] ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 stroke-3" />
+                                <span>Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Copy Draft</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                   </div>
                 );
               })}
@@ -1240,46 +1995,117 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
 
             {/* Habits List */}
             {habits.length === 0 ? (
-              <p className="text-xs text-gray-400 italic font-light">No daily support habits registered yet.</p>
+              <div className="custom-card p-5 text-center bg-white/45 backdrop-blur-md border border-[#ECE9E3]/40 space-y-3.5" id="habits-empty-state">
+                <Repeat className="w-8 h-8 text-[#FF6B4A]/50 mx-auto animate-pulse" />
+                <div className="space-y-1">
+                  <h4 className="font-outfit text-xs font-bold text-gray-800">Support Routine is Empty</h4>
+                  <p className="text-[11px] text-gray-400 font-light leading-relaxed">
+                    Under high pressure, tiny anchors keep you grounded. Install a simple daily mini-habit to safeguard your energy.
+                  </p>
+                </div>
+                <div className="pt-1 flex flex-wrap justify-center gap-1.5">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const created = await dataService.createHabit(userId, "5-min Deep Breathing");
+                        setHabits(prev => [...prev, created]);
+                        setActionSuccess("Created '5-min Deep Breathing' habit!");
+                      } catch (err) {
+                        setActionError("Could not add habit.");
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-[#FF6B4A] rounded text-[10px] font-semibold transition-all cursor-pointer"
+                  >
+                    + Quick Add "Deep Breathing"
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const created = await dataService.createHabit(userId, "Drink Water Break");
+                        setHabits(prev => [...prev, created]);
+                        setActionSuccess("Created 'Drink Water Break' habit!");
+                      } catch (err) {
+                        setActionError("Could not add habit.");
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-[#FF6B4A] rounded text-[10px] font-semibold transition-all cursor-pointer"
+                  >
+                    + Quick Add "Drink Water"
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="space-y-2">
                 {habits.map((habit) => {
                   const done = isHabitDoneToday(habit);
                   return (
-                    <div key={habit.id} className="custom-card p-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <button
-                          onClick={() => handleToggleHabit(habit.id)}
-                          className="transition-transform transform active:scale-90 shrink-0 cursor-pointer"
-                          id={`toggle-habit-${habit.id}`}
-                        >
-                          {done ? (
-                            <div className="w-5 h-5 rounded-md bg-[#4CAF82] flex items-center justify-center text-white">
-                              <Check className="w-3.5 h-3.5 stroke-2" />
-                            </div>
-                          ) : (
-                            <div className="w-5 h-5 rounded-md border-2 border-gray-200 hover:border-[#FF6B4A]" />
-                          )}
-                        </button>
-                        
-                        <div className="min-w-0">
-                          <span className={`text-xs font-semibold block truncate ${done ? "line-through text-gray-400" : "text-[#232323]"}`}>
-                            {habit.name}
-                          </span>
-                          <span className="text-[10px] text-gray-400 font-medium block">
-                            Streak: <span className="text-[#FF6B4A] font-bold tabular-nums">{habit.streak} days</span>
-                          </span>
+                    <div key={habit.id} className="custom-card p-4 flex flex-col gap-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <button
+                            onClick={() => handleToggleHabit(habit.id)}
+                            className="transition-transform transform active:scale-90 shrink-0 cursor-pointer"
+                            id={`toggle-habit-${habit.id}`}
+                          >
+                            {done ? (
+                              <div className="w-5 h-5 rounded-md bg-[#4CAF82] flex items-center justify-center text-white">
+                                <Check className="w-3.5 h-3.5 stroke-2" />
+                              </div>
+                            ) : (
+                              <div className="w-5 h-5 rounded-md border-2 border-gray-200 hover:border-[#FF6B4A]" />
+                            )}
+                          </button>
+                          
+                          <div className="min-w-0">
+                            <span className={`text-xs font-semibold block truncate ${done ? "line-through text-gray-400" : "text-[#232323]"}`}>
+                              {habit.name}
+                            </span>
+                            <span className="text-[10px] text-gray-400 font-medium block">
+                              Streak: <span className="text-[#FF6B4A] font-bold tabular-nums">{habit.streak} days</span>
+                            </span>
+                          </div>
                         </div>
+
+                        <button
+                          onClick={() => handleDeleteHabit(habit.id)}
+                          className="p-1 text-gray-300 hover:text-[#E2574C] rounded cursor-pointer"
+                          title="Delete habit"
+                          id={`delete-habit-${habit.id}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
 
-                      <button
-                        onClick={() => handleDeleteHabit(habit.id)}
-                        className="p-1 text-gray-300 hover:text-[#E2574C] rounded"
-                        title="Delete habit"
-                        id={`delete-habit-${habit.id}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {/* 7-day streak dots */}
+                      <div className="pt-2.5 border-t border-gray-100/60">
+                        <div className="flex items-center justify-between px-0.5">
+                          {get7DayWindow().map(({ dateStr, label, singleChar }) => {
+                            const isCompleted = habit.completed_dates.includes(dateStr);
+                            const isToday = dateStr === new Date().toISOString().split("T")[0];
+                            return (
+                              <button
+                                key={dateStr}
+                                onClick={() => handleToggleHabitForDate(habit.id, dateStr)}
+                                className="flex flex-col items-center gap-1 group cursor-pointer focus:outline-none"
+                                title={`${label} (${dateStr}): ${isCompleted ? 'Done' : 'Not done'}`}
+                              >
+                                <span className={`text-[9px] font-bold ${isToday ? "text-[#FF6B4A]" : "text-gray-400"} uppercase`}>
+                                  {singleChar}
+                                </span>
+                                <div 
+                                  className={`w-3 h-3 rounded-full transition-all duration-200 flex items-center justify-center ${
+                                    isCompleted 
+                                      ? "bg-[#FF6B4A] shadow-xs scale-110" 
+                                      : "border-1.5 border-gray-300 bg-transparent group-hover:border-[#FF6B4A]"
+                                  }`}
+                                >
+                                  {isCompleted && <Check className="w-2 h-2 text-white stroke-3" />}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -1294,11 +2120,18 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
               <span>Recommendations</span>
             </h3>
             <div className="custom-card p-5 bg-white/45 backdrop-blur-md border border-white/40 space-y-3">
-              {recommendations.length === 0 ? (
-                <div className="text-center py-4 text-gray-400">
-                  <TrendingUp className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                  <p className="text-xs font-light leading-relaxed">
-                    Let Gemini evaluate your high-stakes tasks to produce custom-tailored recommendations and quick wins!
+              {aiPlanning ? (
+                <div className="space-y-2.5 py-2 animate-pulse" id="recommendations-loading">
+                  <div className="h-3.5 bg-gray-200 rounded w-1/3 mb-4" />
+                  <div className="h-3 bg-gray-200/80 rounded w-full" />
+                  <div className="h-3 bg-gray-200/60 rounded w-11/12" />
+                  <div className="h-3 bg-gray-200/40 rounded w-5/6" />
+                </div>
+              ) : recommendations.length === 0 ? (
+                <div className="text-center py-4 text-gray-400 space-y-2" id="recommendations-empty">
+                  <TrendingUp className="w-8 h-8 mx-auto text-gray-300 animate-pulse" />
+                  <p className="text-[11px] font-light leading-relaxed text-gray-400 max-w-xs mx-auto">
+                    Let Gemini review your tasks to offer stress management quick wins, priority order, and rest suggestions.
                   </p>
                 </div>
               ) : (
@@ -1316,71 +2149,308 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
 
           {/* Daily Schedule Timeline Section */}
           <div className="space-y-4" id="timeline-section">
-            <h3 className="font-outfit text-xl font-bold tracking-tight">Today's Schedule</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-outfit text-xl font-bold tracking-tight">Today's Schedule</h3>
+              <button
+                onClick={() => setShowCalendarView(!showCalendarView)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
+                  showCalendarView 
+                    ? "bg-[#FF6B4A]/10 text-[#FF6B4A] border-[#FF6B4A]/30" 
+                    : "bg-white text-gray-500 border-[#ECE9E3] hover:text-[#FF6B4A]"
+                }`}
+                id="toggle-calendar-view"
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>{showCalendarView ? "Hide Calendar" : "View as Calendar"}</span>
+              </button>
+            </div>
             
-            {currentPlan.length === 0 ? (
-              <div className="custom-card p-6 text-center border border-dashed">
-                <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-3" />
-                <p className="text-xs text-gray-500 font-light leading-relaxed mb-4">
-                  No plan generated yet. Let Gemini organize your deadlines, workload, and rest intervals today.
-                </p>
+            {aiPlanningError ? (
+              <div className="custom-card p-5 border border-red-200 bg-red-50/40 text-center space-y-3" id="timeline-error">
+                <AlertCircle className="w-8 h-8 text-[#E2574C] mx-auto animate-pulse" />
+                <div className="space-y-1">
+                  <h4 className="font-outfit text-xs font-bold text-gray-800">Timeline Generation Failed</h4>
+                  <p className="text-[11px] text-gray-500 font-light leading-relaxed">
+                    We had some difficulty building your customized timeline plan with Gemini. Don't let it stress you out — you can try once more!
+                  </p>
+                </div>
+                <button
+                  onClick={handleAIGeneratePlan}
+                  className="px-4 py-1.5 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-xs font-bold custom-btn flex items-center justify-center gap-1.5 mx-auto cursor-pointer transition-all active:scale-95 shadow-sm"
+                >
+                  <RefreshCw className="w-3 h-3" /> Retry Scheduling
+                </button>
+              </div>
+            ) : aiPlanning ? (
+              <div className="custom-card p-6 border border-[#FF6B4A]/20 bg-[#FAFAF9] relative overflow-hidden animate-pulse" id="timeline-loading">
+                <div className="flex items-start gap-3.5">
+                  <div className="p-2.5 bg-[#FF6B4A]/10 text-[#FF6B4A] rounded-xl flex-shrink-0 animate-bounce">
+                    <Calendar className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-3 w-full">
+                    <h4 className="font-outfit text-sm font-bold text-gray-800">Structuring your realistic timeline...</h4>
+                    <p className="text-[11px] text-gray-500 font-light leading-relaxed">
+                      Gemini is organizing deadlines, allocating study blocks, and scheduling healthy breathing intervals. Just sit back and relax.
+                    </p>
+                    
+                    {/* Animated pulse bars */}
+                    <div className="space-y-2 pt-2">
+                      <div className="h-5 bg-gray-200/70 rounded-md w-11/12" />
+                      <div className="h-5 bg-gray-200/50 rounded-md w-9/12" />
+                      <div className="h-5 bg-gray-200/30 rounded-md w-10/12" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : currentPlan.length === 0 ? (
+              <div className="custom-card p-6 text-center border-2 border-dashed border-[#ECE9E3] bg-[#FAFAF9]/40 space-y-4" id="timeline-empty">
+                <div className="w-12 h-12 bg-[#FF6B4A]/10 text-[#FF6B4A] rounded-full flex items-center justify-center mx-auto">
+                  <Calendar className="w-6 h-6" />
+                </div>
+                <div className="space-y-1 max-w-xs mx-auto">
+                  <h4 className="font-outfit text-xs font-bold text-gray-800">No Daily Agenda Generated</h4>
+                  <p className="text-[11px] text-gray-500 font-light leading-relaxed">
+                    Let Gemini evaluate your high-stakes workload, split deadlines into hourly goals, and construct a highly realistic daily agenda with buffers.
+                  </p>
+                </div>
                 <button
                   onClick={handleAIGeneratePlan}
                   disabled={aiPlanning || loading}
-                  className="w-full py-2 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-xs font-semibold custom-btn shadow-xs"
+                  className="px-4 py-2 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-xs font-bold custom-btn w-full shadow-sm cursor-pointer"
                   id="btn-generate-plan-placeholder"
                 >
-                  Generate Daily Plan
+                  Generate Daily Schedule
                 </button>
               </div>
             ) : (
-              <div className="relative pl-4 border-l-2 border-[#ECE9E3] space-y-4">
-                {currentPlan.map((slot, index) => (
-                  <div key={index} className="relative group">
-                    {/* Ring Node indicator */}
-                    <div className={`absolute -left-[21px] top-1.5 w-3 h-3 rounded-full border-2 bg-white ${
-                      slot.type === "task" 
-                        ? "border-[#FF6B4A]" 
-                        : slot.type === "break"
-                        ? "border-[#4CAF82]"
-                        : "border-gray-300"
-                    }`} />
-
-                    <div className="bg-white/45 backdrop-blur-md p-3 rounded-xl border border-white/40 shadow-xs">
-                      <div className="flex items-center justify-between text-[10px] text-gray-400 font-bold mb-1.5 uppercase tracking-wide tabular-nums">
-                        <span>{slot.startTime} &ndash; {slot.endTime}</span>
-                        <span className={`px-1.5 py-0.5 rounded ${
-                          slot.type === "task"
-                            ? "bg-orange-50 text-[#FF6B4A]"
+              <div className={showCalendarView ? "grid grid-cols-1 xl:grid-cols-2 gap-6" : "space-y-4"}>
+                {/* Timeline Panel */}
+                <div className="space-y-4">
+                  <div className="relative pl-4 border-l-2 border-[#ECE9E3] space-y-4">
+                    {currentPlan.map((slot, index) => (
+                      <div key={index} className="relative group">
+                        {/* Ring Node indicator */}
+                        <div className={`absolute -left-[21px] top-1.5 w-3 h-3 rounded-full border-2 bg-white ${
+                          slot.type === "task" 
+                            ? "border-[#FF6B4A]" 
                             : slot.type === "break"
-                            ? "bg-emerald-50 text-[#4CAF82]"
-                            : "bg-gray-100 text-gray-600"
-                        }`}>{slot.type}</span>
+                            ? "border-[#4CAF82]"
+                            : "border-gray-300"
+                        }`} />
+
+                        <div className="bg-white/45 backdrop-blur-md p-3 rounded-xl border border-white/40 shadow-xs">
+                          <div className="flex items-center justify-between text-[10px] text-gray-400 font-bold mb-1.5 uppercase tracking-wide tabular-nums">
+                            <span>{slot.startTime} &ndash; {slot.endTime}</span>
+                            <span className={`px-1.5 py-0.5 rounded ${
+                              slot.type === "task"
+                                ? "bg-orange-50 text-[#FF6B4A]"
+                                : slot.type === "break"
+                                ? "bg-emerald-50 text-[#4CAF82]"
+                                : "bg-gray-100 text-gray-600"
+                            }`}>{slot.type}</span>
+                          </div>
+
+                          <h5 className="font-outfit text-xs font-bold text-gray-800 leading-tight">
+                            {slot.label}
+                          </h5>
+
+                          {slot.advice && (
+                            <p className="text-[10px] text-gray-500 mt-1 font-light italic leading-normal">
+                              &ldquo;{slot.advice}&rdquo;
+                            </p>
+                          )}
+                        </div>
                       </div>
+                    ))}
 
-                      <h5 className="font-outfit text-xs font-bold text-gray-800 leading-tight">
-                        {slot.label}
-                      </h5>
-
-                      {slot.advice && (
-                        <p className="text-[10px] text-gray-500 mt-1 font-light italic leading-normal">
-                          &ldquo;{slot.advice}&rdquo;
-                        </p>
-                      )}
-                    </div>
+                    {/* Reset schedule trigger */}
+                    <button
+                      onClick={handleAIGeneratePlan}
+                      disabled={aiPlanning}
+                      className="w-full text-center py-2 text-xs text-gray-400 hover:text-[#FF6B4A] transition-all flex items-center justify-center gap-1"
+                      id="rebuild-timeline"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${aiPlanning ? "animate-spin" : ""}`} /> 
+                      Rebuild schedule
+                    </button>
                   </div>
-                ))}
+                </div>
 
-                {/* Reset schedule trigger */}
-                <button
-                  onClick={handleAIGeneratePlan}
-                  disabled={aiPlanning}
-                  className="w-full text-center py-2 text-xs text-gray-400 hover:text-[#FF6B4A] transition-all flex items-center justify-center gap-1"
-                  id="rebuild-timeline"
-                >
-                  <RefreshCw className={`w-3 h-3 ${aiPlanning ? "animate-spin" : ""}`} /> 
-                  Rebuild schedule
-                </button>
+                {/* Calendar Grid View (rendered alongside) */}
+                {showCalendarView && (
+                  <div className="space-y-4" id="calendar-grid-view">
+                    {(() => {
+                      const parsedTasks = tasks
+                        .filter(t => t.suggestedStartTime && t.suggestedEndTime)
+                        .map(t => {
+                          const start = parseTimeStr(t.suggestedStartTime!);
+                          const end = parseTimeStr(t.suggestedEndTime!);
+                          return { task: t, start, end };
+                        })
+                        .filter(item => item.start !== null && item.end !== null) as {
+                          task: Task;
+                          start: { hour: number; minute: number };
+                          end: { hour: number; minute: number };
+                        }[];
+
+                      let minHour = 8;
+                      let maxHour = 18;
+                      if (parsedTasks.length > 0) {
+                        const hours = parsedTasks.flatMap(pt => [pt.start.hour, pt.end.hour]);
+                        minHour = Math.max(0, Math.min(...hours) - 1);
+                        maxHour = Math.min(23, Math.max(...hours) + 1);
+                      }
+
+                      if (maxHour - minHour < 4) {
+                        maxHour = Math.min(23, minHour + 8);
+                      }
+
+                      const hoursRange: number[] = [];
+                      for (let h = minHour; h <= maxHour; h++) {
+                        hoursRange.push(h);
+                      }
+
+                      const formatHourLabel = (h: number) => {
+                        const ampm = h >= 12 ? "PM" : "AM";
+                        const displayHour = h % 12 === 0 ? 12 : h % 12;
+                        return `${displayHour}:00 ${ampm}`;
+                      };
+
+                      return (
+                        <div className="custom-card p-4 bg-white/45 backdrop-blur-md border border-white/40 space-y-4">
+                          <div className="flex items-center justify-between border-b border-[#ECE9E3] pb-3">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 bg-[#FF6B4A]/10 text-[#FF6B4A] rounded-lg">
+                                <Calendar className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <h4 className="font-outfit text-sm font-bold text-gray-800">Day Grid view</h4>
+                                <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">Scheduled Tasks</p>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-500 bg-[#FAFAF9] px-2 py-0.5 rounded-full border border-[#ECE9E3] tabular-nums">
+                              {parsedTasks.length} Task{parsedTasks.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+
+                          {parsedTasks.length === 0 ? (
+                            <div className="text-center py-10 text-gray-400">
+                              <Calendar className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                              <p className="text-xs font-light leading-relaxed">
+                                No task times allocated on calendar yet.<br />
+                                Please click <strong className="text-[#FF6B4A]">Generate Daily Plan</strong> to schedule!
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="relative overflow-x-auto max-h-[500px] overflow-y-auto pr-1">
+                              <div className="relative min-w-[280px]" style={{ height: `${hoursRange.length * 64}px` }}>
+                                {/* Hour Rows */}
+                                {hoursRange.map((h, idx) => (
+                                  <div 
+                                    key={h} 
+                                    className="absolute left-0 right-0 border-t border-dashed border-[#ECE9E3]/60 flex items-start"
+                                    style={{ 
+                                      top: `${idx * 64}px`, 
+                                      height: '64px' 
+                                    }}
+                                  >
+                                    {/* Hour label */}
+                                    <span className="w-14 shrink-0 text-[10px] text-gray-400 font-bold tabular-nums -mt-2 bg-transparent select-none pr-1.5 text-right">
+                                      {formatHourLabel(h)}
+                                    </span>
+                                    {/* Grid line background */}
+                                    <div className="flex-1 h-full border-l border-[#ECE9E3]/30 bg-[#FAFAF9]/20" />
+                                  </div>
+                                ))}
+
+                                {/* Task Cards placed absolutely */}
+                                {parsedTasks.map(({ task, start, end }) => {
+                                  // Calculate start offset & height
+                                  const startOffsetMin = (start.hour - minHour) * 60 + start.minute;
+                                  const topPx = (startOffsetMin / 60) * 64;
+                                  
+                                  let durationMin = (end.hour - start.hour) * 60 + (end.minute - start.minute);
+                                  if (durationMin <= 0) durationMin = 30; // 30 mins default
+                                  const heightPx = (durationMin / 60) * 64;
+
+                                  // Style based on priority rank or risk level
+                                  let cardBg = "bg-orange-50/90 border-[#FF6B4A]/30 text-[#FF6B4A]";
+                                  let tagBg = "bg-[#FF6B4A]/10 text-[#FF6B4A]";
+                                  if (task.riskLevel === "high") {
+                                    cardBg = "bg-red-50/95 border-red-200 text-red-700 shadow-xs";
+                                    tagBg = "bg-red-100 text-red-800";
+                                  } else if (task.riskLevel === "medium") {
+                                    cardBg = "bg-amber-50/95 border-amber-200 text-amber-700 shadow-xs";
+                                    tagBg = "bg-amber-100 text-amber-800";
+                                  } else if (task.status === "completed") {
+                                    cardBg = "bg-emerald-50/80 border-emerald-200/50 text-emerald-800 line-through opacity-75";
+                                    tagBg = "bg-emerald-100 text-emerald-800";
+                                  } else {
+                                    cardBg = "bg-indigo-50/90 border-indigo-100 text-indigo-800";
+                                    tagBg = "bg-indigo-100 text-indigo-800";
+                                  }
+
+                                  // Distribute multiple overlapping tasks slightly on left/right columns if they start at the same time to prevent complete overlay
+                                  const overlapping = parsedTasks.filter(pt => {
+                                    if (pt.task.id === task.id) return false;
+                                    // Overlaps if start time is the same
+                                    return pt.start.hour === start.hour && pt.start.minute === start.minute;
+                                  });
+                                  const isOverlapping = overlapping.length > 0;
+                                  const myIndex = parsedTasks.filter(pt => pt.start.hour === start.hour && pt.start.minute === start.minute).findIndex(pt => pt.task.id === task.id);
+                                  const leftPercent = isOverlapping ? (myIndex * (75 / (overlapping.length + 1))) + 22 : 22;
+                                  const widthPercent = isOverlapping ? (75 / (overlapping.length + 1)) : 75;
+
+                                  return (
+                                    <div
+                                      key={task.id}
+                                      className={`absolute rounded-xl border p-2 flex flex-col justify-between overflow-hidden shadow-xs hover:shadow-md hover:z-20 transition-all group ${cardBg}`}
+                                      style={{
+                                        top: `${topPx + 2}px`,
+                                        height: `${heightPx - 4}px`,
+                                        left: `${leftPercent}%`,
+                                        width: `${widthPercent}%`,
+                                        minHeight: '40px'
+                                      }}
+                                    >
+                                      <div className="space-y-0.5">
+                                        <div className="flex items-center justify-between gap-1 flex-wrap">
+                                          <span className={`text-[8px] font-extrabold uppercase tracking-wider px-1 py-0.5 rounded ${tagBg} tabular-nums`}>
+                                            {task.suggestedStartTime} &ndash; {task.suggestedEndTime}
+                                          </span>
+                                          {task.priorityRank && (
+                                            <span className="text-[8px] font-bold text-gray-500 bg-white/60 px-0.5 rounded">
+                                              #{task.priorityRank}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <h5 className="font-outfit text-[11px] font-extrabold line-clamp-1 leading-snug">
+                                          {task.title}
+                                        </h5>
+                                      </div>
+
+                                      {/* Complete Action Button */}
+                                      {task.status !== "completed" && (
+                                        <button
+                                          onClick={() => handleToggleTaskStatus(task.id)}
+                                          className="mt-1 self-end bg-white hover:bg-neutral-50 border border-neutral-200 hover:border-emerald-300 text-gray-700 hover:text-emerald-700 p-0.5 rounded transition-all shadow-xs flex items-center gap-0.5 cursor-pointer"
+                                          title="Mark Completed"
+                                        >
+                                          <Check className="w-2.5 h-2.5 stroke-[2.5]" />
+                                          <span className="text-[8px] font-bold px-0.5">Defuse</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1400,6 +2470,45 @@ export default function Dashboard({ userEmail, userId, onLogout, onNavigate }: D
           </div>
         </div>
       )}
+
+      {/* Celebration Milestones Popover */}
+      <AnimatePresence>
+        {celebration && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8, y: 50, x: "-50%" }}
+            animate={{ opacity: 1, scale: 1, y: 0, x: "-50%" }}
+            exit={{ opacity: 0, scale: 0.8, y: -20, x: "-50%" }}
+            transition={{ type: "spring", damping: 15 }}
+            className="fixed bottom-10 left-1/2 z-50 bg-gradient-to-br from-[#232323] via-[#1a1a1a] to-[#2c1d19] text-white p-6 rounded-3xl shadow-2xl flex flex-col items-center text-center border-2 border-[#FF6B4A]/60 max-w-sm w-11/12"
+          >
+            <div className="w-14 h-14 bg-[#FF6B4A]/20 border border-[#FF6B4A]/40 rounded-full flex items-center justify-center text-3xl mb-3.5 animate-bounce">
+              {celebration.days === 7 ? "🏆" : "🚀"}
+            </div>
+            
+            <h4 className="font-outfit text-lg font-extrabold tracking-tight bg-gradient-to-r from-[#FF9F43] to-[#FF6B4A] bg-clip-text text-transparent">
+              {celebration.days}-Day Streak Achieved!
+            </h4>
+            
+            <p className="text-xs text-[#ECE9E3] mt-2 font-medium">
+              Your daily habit <span className="text-[#FF6B4A] font-extrabold">"{celebration.habitName}"</span> is burning bright!
+            </p>
+            
+            <p className="text-[11px] text-gray-400 font-light mt-2 leading-relaxed">
+              {celebration.days === 7 
+                ? "Perfect Week! You've maintained complete consistency. You are a legendary master of momentum!" 
+                : "3 days of consecutive victory! Momentum is officially building. Keep going!"
+              }
+            </p>
+            
+            <button
+              onClick={() => setCelebration(null)}
+              className="mt-4 px-5 py-1.5 bg-[#FF6B4A] hover:bg-[#ff5631] text-white text-[11px] font-bold rounded-full transition-transform active:scale-95 cursor-pointer shadow-md"
+            >
+              Continue My Streak
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
